@@ -258,17 +258,14 @@ local function collectCubeUntilGone(cubeName)
     return success
 end
 
--- Cancel hop timer
+-- Cancel hop timer (simplified)
 local function cancelHopTimer()
-    if hopTimer then
-        hopTimer:Disconnect()
-        hopTimer = nil
-    end
+    hopTimer = nil
     hopTimerActive = false
     hopCancelled = true
 end
 
--- Start the 3-second hop timer
+-- Start the 3-second hop timer (simplified)
 local function startHopTimer()
     -- Cancel any existing timer
     cancelHopTimer()
@@ -289,8 +286,8 @@ local function startHopTimer()
         return
     end
     
-    -- Create new timer
-    hopTimer = game:GetService("RunService").Stepped:Connect(function()
+    -- Simple timer using spawn
+    spawn(function()
         wait(3)
         
         -- Only proceed if timer is still active and not cancelled
@@ -301,20 +298,12 @@ local function startHopTimer()
             if #remainingCubes == 0 then
                 print("❌ No cubes found after 3 seconds, hopping to new server...")
                 hopTimerActive = false
-                hopTimer:Disconnect()
-                hopTimer = nil
                 serverHop()
             else
                 print("📦 Found " .. #remainingCubes .. " cube(s) after timer, collecting...")
                 hopTimerActive = false
-                hopTimer:Disconnect()
-                hopTimer = nil
                 collectCubes(remainingCubes)
             end
-        elseif hopTimer then
-            -- Timer was cancelled, clean up
-            hopTimer:Disconnect()
-            hopTimer = nil
         end
     end)
 end
