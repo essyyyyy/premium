@@ -1,0 +1,267 @@
+local cubeNames = {
+    "Luck Cube",
+    "Speed Cube",
+    "Inferno Cube",
+    "Glitch Cube",
+    "Haste Cube",
+    "Fortune Cube",
+    "Pastel Cube",
+    "Golden Cube",
+    "Wealth Cube",
+    "Spore Blossom",
+    "Technosphere",
+    "Event Horizon",
+    "Stellar Nebula",
+    "Dice of Fate",
+    "Fortune of Wind",
+    "Multitude of Rain",
+    "Silent Speed of Snow",
+    "Dice of Life"
+}
+
+local placeId = 17601705136
+local currentMode = "both" -- Can be "tp", "bring", or "both"
+local isServerHopping = false
+local scriptUrl = "https://raw.githubusercontent.com/yourusername/yourrepo/main/script.lua" -- Replace with actual URL where this script is hosted
+
+-- Function to set up teleport queue
+local function setupTeleportQueue()
+    -- Check if queue_on_teleport exists (Synapse, Script-Ware, etc.)
+    if queue_on_teleport then
+        -- Queue the script to re-execute after teleport
+        queue_on_teleport([[loadstring(game:HttpGet("]] .. scriptUrl .. [["))()]])
+        print("✓ Teleport queue set up successfully")
+    else
+        -- Fallback for executors without queue_on_teleport
+        print("⚠ queue_on_teleport not available, using fallback method")
+        game:GetService("TeleportService").TeleportInitFailed:Connect(function()
+            wait(5)
+            loadstring(game:HttpGet(scriptUrl))()
+        end)
+    end
+end
+
+-- Server hopping function
+local function serverHop()
+    if isServerHopping then return end
+    isServerHopping = true
+    
+    -- Setup teleport queue before hopping
+    setupTeleportQueue()
+    
+    -- Get list of servers
+    local function getServers(cursor)
+        local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?limit=100", placeId)
+        if cursor then
+            url = url .. "&cursor=" .. cursor
+        end
+        
+        local success, response = pcall(function()
+            return game:HttpGet(url)
+        end)
+        
+        if success and response then
+            return game:GetService("HttpService"):JSONDecode(response)
+        end
+        return nil
+    end
+    
+    -- Collect all servers
+    local servers = {}
+    local cursor = nil
+    repeat
+        local data = getServers(cursor)
+        if data and data.data then
+            for _, server in ipairs(data.data) do
+                -- Skip current server and full servers
+                if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                    table.insert(servers, server.id)
+                end
+            end
+            cursor = data.nextPageCursor
+        else
+            break
+        end
+    until not cursor
+    
+    -- If we found servers, join a random one
+    if #servers > 0 then
+        local randomServer = servers[math.random(1, #servers)]
+        print("Server hopping to: " .. randomServer)
+        
+        -- Teleport to new server
+        game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer, game.Players.LocalPlayer)
+    else
+        print("No other servers available, retrying...")
+        isServerHopping = false
+        serverHop()
+    end
+end
+
+-- TP to cubes function
+local function teleportToCube()
+    local player = game.Players.LocalPlayer
+    
+    if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local humanoidRootPart = player.Character.HumanoidRootPart
+        
+        for _, cubeName in ipairs(cubeNames) do
+            local cubeModel = game.Workspace:FindFirstChild(cubeName)
+            
+            if cubeModel and cubeModel:IsA("Model") then
+                local modelCenter = cubeModel:GetModelCFrame().p
+                humanoidRootPart.CFrame = CFrame.new(modelCenter)
+                print("Teleported to: " .. cubeName)
+                return true -- Cube found
+            end
+        end
+    end
+    return false -- No cube found
+end
+
+-- Bring cubes function (fire touch detectors)
+local function bringCubes()
+    local player = game.Players.LocalPlayer
+    if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return false
+    end
+    
+    local humanoidRootPart = player.Character.HumanoidRootPart
+    local cubeFound = false
+    
+    for _, cubeName in ipairs(cubeNames) do
+        local cubeModel = game.Workspace:FindFirstChild(cubeName)
+        
+        if cubeModel and cubeModel:IsA("Model") then
+            for _, child in ipairs(cubeModel:GetDescendants()) do
+                if child:IsA("TouchTransmitter") then
+                    firetouchinterest(humanoidRootPart, child.Parent, 0)
+                    firetouchinterest(humanoidRootPart, child.Parent, 1)
+                    print("Collected: " .. cubeName)
+                    cubeFound = true
+                end
+            end
+        end
+    end
+    
+    return cubeFound
+end
+
+-- Wait for game to be fully loaded
+local function waitForGameLoad()
+    -- Wait for player to exist
+    repeat wait() until game.Players.LocalPlayer
+    
+    -- Wait for character to load
+    if not game.Players.LocalPlayer.Character then
+        game.Players.LocalPlayer.CharacterAdded:Wait()
+    end
+    
+    -- Wait for workspace to be ready
+    repeat wait() until game.Workspace
+    
+    -- Wait a tiny bit for everything to settle
+    wait(0.1)
+end
+
+-- Main loop function
+local function mainLoop()
+    while true do
+        -- Reset server hop flag when we're in a new server
+        isServerHopping = false
+        
+        -- Ensure game is loaded
+        waitForGameLoad()
+        
+        local player = game.Players.LocalPlayer
+        local character = player.Character
+        
+        -- Make sure character has HumanoidRootPart
+        if not character:FindFirstChild("HumanoidRootPart") then
+            character:WaitForChild("HumanoidRootPart")
+        end
+        
+        local cubeFound = false
+        
+        -- Execute based on current mode
+        if currentMode == "tp" or currentMode == "both" then
+            if teleportToCube() then
+                cubeFound = true
+            end
+        end
+        
+        if currentMode == "bring" or currentMode == "both" then
+            if bringCubes() then
+                cubeFound = true
+            end
+        end
+        
+        -- If no cubes found, server hop
+        if not cubeFound then
+            print("No cubes found in this server, hopping to new server...")
+            serverHop()
+            return -- Exit current loop, will restart in new server via queue
+        end
+    end
+end
+
+-- Anti-AFK function
+local function antiAfk()
+    while true do
+        local player = game.Players.LocalPlayer
+        if player and player.Character then
+            local humanoid = player.Character:FindFirstChild("Humanoid")
+            if humanoid then
+                -- Minimal movement to prevent AFK
+                humanoid.Jump = true
+                humanoid.Jump = false
+            end
+        end
+        wait(300) -- Every 5 minutes
+    end
+end
+
+-- Character respawn handler
+local function handleRespawn()
+    while true do
+        local player = game.Players.LocalPlayer
+        if player then
+            -- Wait for character to respawn
+            player.CharacterAdded:Wait()
+            print("Character respawned, continuing...")
+        end
+    end
+end
+
+-- Initialize script
+local function initialize()
+    print("=== Tycoon RNG Auto Collector ===")
+    print("✓ TP to Cubes: ON")
+    print("✓ Bring Cubes: ON")
+    print("✓ Server Hop: ON")
+    print("Mode: " .. currentMode)
+    print("================================")
+    
+    -- Start anti-afk in separate thread
+    coroutine.wrap(antiAfk)()
+    
+    -- Start respawn handler
+    coroutine.wrap(handleRespawn)()
+    
+    -- Wait for game to load
+    waitForGameLoad()
+    
+    -- Start main loop
+    mainLoop()
+end
+
+-- Handle character respawns by restarting main loop
+game.Players.LocalPlayer.CharacterAdded:Connect(function()
+    -- Small delay for character to fully load
+    wait(0.1)
+    -- Restart main loop in a new thread
+    coroutine.wrap(mainLoop)()
+end)
+
+-- Start the script
+initialize()
