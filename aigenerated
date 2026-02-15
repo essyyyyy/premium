@@ -38,282 +38,6 @@ local hopRetryCount = 0
 local SERVER_HOP_ENABLED = true
 -- ========================
 
--- ===== COLLECTION COUNTER =====
--- This will persist across servers using file storage
-local counterFile = "TycoonRNG_Counter.txt"
-local collectionCounts = {}
-local totalCollected = 0
-local counterGui = nil
-local counterEnabled = true
-
--- Function to load counter from file
-local function loadCounter()
-    -- Try different executor file read methods
-    local success, data = pcall(function()
-        if readfile then
-            return readfile(counterFile)
-        elseif isfile and readfile then
-            return readfile(counterFile)
-        end
-        return nil
-    end)
-    
-    if success and data then
-        local success, decoded = pcall(function()
-            return game:GetService("HttpService"):JSONDecode(data)
-        end)
-        if success and decoded then
-            collectionCounts = decoded.counts or {}
-            totalCollected = decoded.total or 0
-            print("📊 Loaded counter: " .. totalCollected .. " total cubes collected")
-            return
-        end
-    end
-    
-    -- Initialize new counter
-    collectionCounts = {}
-    for _, name in ipairs(cubeNames) do
-        collectionCounts[name] = 0
-    end
-    totalCollected = 0
-    print("📊 Started new counter")
-end
-
--- Function to save counter to file
-local function saveCounter()
-    local data = {
-        counts = collectionCounts,
-        total = totalCollected
-    }
-    
-    local success, encoded = pcall(function()
-        return game:GetService("HttpService"):JSONEncode(data)
-    end)
-    
-    if success and encoded then
-        pcall(function()
-            if writefile then
-                writefile(counterFile, encoded)
-            end
-        end)
-    end
-end
-
--- Function to increment counter for a cube
-local function incrementCounter(cubeName)
-    if not collectionCounts[cubeName] then
-        collectionCounts[cubeName] = 0
-    end
-    collectionCounts[cubeName] = collectionCounts[cubeName] + 1
-    totalCollected = totalCollected + 1
-    
-    -- Save to file
-    saveCounter()
-    
-    -- Update GUI if it exists
-    if counterGui and counterGui.Enabled then
-        updateCounterDisplay()
-    end
-    
-    print("📊 +1 " .. cubeName .. " (Total: " .. totalCollected .. ")")
-end
-
--- Function to create counter GUI
-local function createCounterGui()
-    if counterGui then
-        counterGui:Destroy()
-    end
-    
-    -- Create ScreenGui
-    counterGui = Instance.new("ScreenGui")
-    counterGui.Name = "CubeCounter"
-    counterGui.ResetOnSpawn = false
-    counterGui.Parent = game:GetService("CoreGui")
-    
-    -- Create main frame
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 250, 0, 300)
-    frame.Position = UDim2.new(0, 10, 0.5, -150)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    frame.BackgroundTransparency = 0.2
-    frame.BorderSizePixel = 0
-    frame.Parent = counterGui
-    
-    -- Add corner rounding
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = frame
-    
-    -- Title
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 30)
-    title.Position = UDim2.new(0, 0, 0, 0)
-    title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    title.BackgroundTransparency = 0.3
-    title.Text = "📊 Collection Counter"
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.TextScaled = true
-    title.Font = Enum.Font.GothamBold
-    title.Parent = frame
-    
-    -- Total counter
-    local totalLabel = Instance.new("TextLabel")
-    totalLabel.Size = UDim2.new(1, 0, 0, 30)
-    totalLabel.Position = UDim2.new(0, 0, 0, 30)
-    totalLabel.BackgroundTransparency = 1
-    totalLabel.Text = "Total: 0"
-    totalLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
-    totalLabel.TextScaled = true
-    totalLabel.Font = Enum.Font.GothamBold
-    totalLabel.Parent = frame
-    
-    -- Create scrolling frame for cube list
-    local scrollingFrame = Instance.new("ScrollingFrame")
-    scrollingFrame.Size = UDim2.new(1, -10, 1, -90)
-    scrollingFrame.Position = UDim2.new(0, 5, 0, 65)
-    scrollingFrame.BackgroundTransparency = 1
-    scrollingFrame.ScrollBarThickness = 5
-    scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, #cubeNames * 25)
-    scrollingFrame.Parent = frame
-    
-    -- Create labels for each cube
-    local yPos = 0
-    for i, cubeName in ipairs(cubeNames) do
-        local cubeFrame = Instance.new("Frame")
-        cubeFrame.Size = UDim2.new(1, 0, 0, 22)
-        cubeFrame.Position = UDim2.new(0, 0, 0, yPos)
-        cubeFrame.BackgroundTransparency = 1
-        cubeFrame.Parent = scrollingFrame
-        
-        local nameLabel = Instance.new("TextLabel")
-        nameLabel.Size = UDim2.new(0.7, 0, 1, 0)
-        nameLabel.Position = UDim2.new(0, 5, 0, 0)
-        nameLabel.BackgroundTransparency = 1
-        nameLabel.Text = cubeName
-        nameLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-        nameLabel.TextXAlignment = Enum.TextXAlignment.Left
-        nameLabel.TextScaled = true
-        nameLabel.Font = Enum.Font.Gotham
-        nameLabel.Parent = cubeFrame
-        
-        local countLabel = Instance.new("TextLabel")
-        countLabel.Name = "Count_" .. cubeName
-        countLabel.Size = UDim2.new(0.3, -5, 1, 0)
-        countLabel.Position = UDim2.new(0.7, 0, 0, 0)
-        countLabel.BackgroundTransparency = 1
-        countLabel.Text = "0"
-        countLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-        countLabel.TextXAlignment = Enum.TextXAlignment.Right
-        countLabel.TextScaled = true
-        countLabel.Font = Enum.Font.GothamBold
-        countLabel.Parent = cubeFrame
-        
-        yPos = yPos + 22
-    end
-    
-    -- Toggle button
-    local toggleBtn = Instance.new("TextButton")
-    toggleBtn.Size = UDim2.new(0, 30, 0, 30)
-    toggleBtn.Position = UDim2.new(1, -35, 1, -35)
-    toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-    toggleBtn.Text = "X"
-    toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    toggleBtn.TextScaled = true
-    toggleBtn.Font = Enum.Font.GothamBold
-    toggleBtn.Parent = frame
-    
-    -- Add corner to button
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 4)
-    btnCorner.Parent = toggleBtn
-    
-    -- Store references
-    counterGui.Frame = frame
-    counterGui.TotalLabel = totalLabel
-    counterGui.ToggleBtn = toggleBtn
-    counterGui.ScrollingFrame = scrollingFrame
-    
-    -- Make draggable
-    local dragging = false
-    local dragInput
-    local dragStart
-    local startPos
-    
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-        end
-    end)
-    
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
-            dragInput = input
-        end
-    end)
-    
-    game:GetService("UserInputService").InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
-    
-    game:GetService("UserInputService").InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-    
-    -- Toggle button functionality
-    toggleBtn.MouseButton1Click:Connect(function()
-        counterEnabled = not counterEnabled
-        if counterEnabled then
-            frame.Visible = true
-            toggleBtn.Text = "X"
-            toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-        else
-            frame.Visible = false
-            toggleBtn.Text = "📊"
-            toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 255)
-            toggleBtn.Size = UDim2.new(0, 40, 0, 40)
-            toggleBtn.Position = UDim2.new(1, -45, 1, -45)
-        end
-    end)
-    
-    -- Initial update
-    updateCounterDisplay()
-end
-
--- Function to update counter display
-local function updateCounterDisplay()
-    if not counterGui or not counterGui.Frame then return end
-    
-    -- Update total
-    if counterGui.TotalLabel then
-        counterGui.TotalLabel.Text = "Total: " .. totalCollected
-    end
-    
-    -- Update each cube count
-    for _, cubeName in ipairs(cubeNames) do
-        local countLabel = counterGui.Frame:FindFirstChild("ScrollingFrame"):FindFirstChild("Count_" .. cubeName, true)
-        if countLabel then
-            countLabel.Text = tostring(collectionCounts[cubeName] or 0)
-        end
-    end
-end
-
--- Load counter at startup
-loadCounter()
-
--- Create GUI
-spawn(function()
-    wait(2) -- Wait for game to load
-    createCounterGui()
-end)
--- ============================
-
 -- Wait for game to fully load
 print("=== Tycoon RNG Auto Collector ===")
 print("Waiting for game to load...")
@@ -469,7 +193,6 @@ local function collectSingleCube(cubeName)
     local maxTime = 10 -- Maximum 10 seconds per cube
     local lastTPTime = 0
     local lastWiggleTime = 0
-    local collected = false
     
     print("🔧 Attempting to collect: " .. cubeName)
     
@@ -548,29 +271,17 @@ local function collectSingleCube(cubeName)
             end
         end
         
-        -- Check if cube was collected
-        if not game.Workspace:FindFirstChild(cubeName) then
-            collected = true
-            incrementCounter(cubeName) -- Increment counter when collected
-            break
-        end
-        
         wait(0.5) -- Main loop delay
     end
     
-    -- Double-check if cube was collected at the end
-    if not collected and not game.Workspace:FindFirstChild(cubeName) then
-        collected = true
-        incrementCounter(cubeName)
-    end
-    
-    if collected then
+    local success = not game.Workspace:FindFirstChild(cubeName)
+    if success then
         print("✅ Successfully collected: " .. cubeName)
     else
         print("⚠ Failed to collect: " .. cubeName .. " (timeout)")
     end
     
-    return collected
+    return success
 end
 
 -- Cancel hop timer (simplified)
@@ -713,12 +424,6 @@ local function collectCubes(cubesToCollect)
                                 end
                             end
                             
-                            -- Check if collected during retry
-                            if not game.Workspace:FindFirstChild(cubeName) then
-                                incrementCounter(cubeName)
-                                break
-                            end
-                            
                             wait(0.5) -- Wait between touch attempts
                         end
                     end
@@ -791,7 +496,6 @@ local function initialize()
     print("✓ TP to Cubes: ON")
     print("✓ Bring Cubes: ON")
     print("✓ Server Hop: " .. (SERVER_HOP_ENABLED and "ON" or "OFF"))
-    print("✓ Collection Counter: ON")
     print("Mode: " .. currentMode)
     
     -- Fetch servers ONCE at startup (if enabled)
