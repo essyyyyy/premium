@@ -25,14 +25,21 @@ local isServerHopping = false
 local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads/main/aigenerated"
 
 -- Wait for game to fully load
+print("=== Tycoon RNG Auto Collector ===")
+print("Waiting for game to load...")
+
 if not game:IsLoaded() then
-    print("Waiting for game to load...")
     game.Loaded:Wait()
-    print("Game loaded!")
 end
 
--- Wait a tiny bit extra for everything to initialize
-wait(0.5)
+print("✓ Game loaded!")
+print("Waiting 15 seconds for everything to initialize...")
+
+-- Wait 15 seconds after game loads before doing anything
+wait(15)
+
+print("15 seconds complete, starting script...")
+print("================================")
 
 -- Function to set up teleport queue
 local function setupTeleportQueue()
@@ -173,9 +180,6 @@ local function waitForGameLoad()
     repeat 
         wait() 
     until game.Workspace
-    
-    -- Wait a tiny bit for everything to settle
-    wait(0.1)
 end
 
 -- Main loop function
@@ -279,15 +283,21 @@ game.Players.LocalPlayer.CharacterAdded:Connect(function()
     coroutine.wrap(mainLoop)()
 end)
 
--- Start the script with game load check
+-- Start the script with game load check and 15 second wait
 print("Script started - waiting for game to load...")
+
+-- FIRST: Wait for game to load
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
-print("Game is loaded, initializing script...")
 
--- Small delay after game loads
-wait(0.5)
+-- SECOND: Game is loaded, now wait 15 seconds
+print("✓ Game loaded!")
+print("⏳ Waiting 15 seconds for everything to initialize...")
+wait(15)
+
+-- THIRD: 15 seconds passed, now start the script
+print("✓ 15 seconds complete, initializing script...")
 
 -- Initialize
 initialize()
