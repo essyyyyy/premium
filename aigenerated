@@ -26,6 +26,7 @@ local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads
 local gameInitialized = false
 local hopTimer = nil
 local hopCancelled = false
+local collectionActive = false
 
 -- Wait for game to fully load
 print("=== Tycoon RNG Auto Collector ===")
@@ -57,6 +58,7 @@ local function serverHop()
     if isServerHopping then return end
     isServerHopping = true
     
+    print("🔄 Preparing to server hop...")
     setupTeleportQueue()
     
     local function getServers(cursor)
@@ -93,11 +95,12 @@ local function serverHop()
     
     if #servers > 0 then
         local randomServer = servers[math.random(1, #servers)]
-        print("Server hopping to: " .. randomServer)
+        print("🚀 Server hopping to: " .. randomServer)
         game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer, game.Players.LocalPlayer)
     else
-        print("No other servers available, retrying...")
+        print("⚠ No other servers available, retrying in 5 seconds...")
         isServerHopping = false
+        wait(5)
         serverHop()
     end
 end
@@ -127,7 +130,7 @@ local function teleportToCube(cubeName)
         if cubeModel and cubeModel:IsA("Model") then
             local modelCenter = cubeModel:GetModelCFrame().p
             humanoidRootPart.CFrame = CFrame.new(modelCenter)
-            print("Teleported to: " .. cubeName)
+            print("📦 Teleported to: " .. cubeName)
             return true
         end
     end
@@ -149,7 +152,7 @@ local function bringCube(cubeName)
             if child:IsA("TouchTransmitter") then
                 firetouchinterest(humanoidRootPart, child.Parent, 0)
                 firetouchinterest(humanoidRootPart, child.Parent, 1)
-                print("Collected: " .. cubeName)
+                print("✨ Collected: " .. cubeName)
                 return true
             end
         end
@@ -157,69 +160,96 @@ local function bringCube(cubeName)
     return false
 end
 
--- Start the 3-second hop timer
-local function startHopTimer()
+-- Cancel hop timer
+local function cancelHopTimer()
     if hopTimer then
         hopTimer:Disconnect()
         hopTimer = nil
     end
+    hopCancelled = true
+end
+
+-- Start the 3-second hop timer
+local function startHopTimer()
+    -- Cancel any existing timer
+    cancelHopTimer()
     
     hopCancelled = false
     print("⏱️ 3-second timer started - waiting for more cubes...")
     
+    -- Small delay to ensure any just-spawned cubes are detected
+    wait(0.1)
+    
+    -- Check if cubes appeared during the delay
+    local immediateCubes = checkForCubes()
+    if #immediateCubes > 0 and not hopCancelled then
+        print("📦 Cubes detected immediately, cancelling timer and collecting...")
+        collectCubes(immediateCubes)
+        return
+    end
+    
+    -- Start the timer
     hopTimer = game:GetService("RunService").Stepped:Connect(function()
         wait(3)
+        
         if hopTimer and not hopCancelled then
-            print("⏱️ 3 seconds passed, checking if any cubes remain...")
+            print("⏱️ 3 seconds passed, checking for cubes...")
             local remainingCubes = checkForCubes()
             
             if #remainingCubes == 0 then
-                print("No cubes remaining, hopping to new server...")
+                print("❌ No cubes found after 3 seconds, hopping to new server...")
                 hopTimer:Disconnect()
                 hopTimer = nil
                 serverHop()
             else
-                print("Cubes still exist, continuing collection...")
+                print("📦 Found " .. #remainingCubes .. " cube(s) after timer, collecting...")
                 hopTimer:Disconnect()
                 hopTimer = nil
-                -- Continue collecting remaining cubes
                 collectCubes(remainingCubes)
             end
         end
     end)
 end
 
--- Main collection function
+-- Main collection function (recursive)
 local function collectCubes(cubesToCollect)
+    if collectionActive then return end
+    collectionActive = true
+    
+    -- Cancel any pending hop timer
+    cancelHopTimer()
+    
+    print("🔍 Starting collection of " .. #cubesToCollect .. " cube(s)...")
+    
     for _, cubeName in ipairs(cubesToCollect) do
-        -- Check if hop was cancelled
-        if hopCancelled then
-            break
+        -- Check if cube still exists (might have been collected by someone else)
+        if game.Workspace:FindFirstChild(cubeName) then
+            -- Collect the cube based on mode
+            if currentMode == "tp" or currentMode == "both" then
+                teleportToCube(cubeName)
+            end
+            
+            if currentMode == "bring" or currentMode == "both" then
+                bringCube(cubeName)
+            end
+            
+            -- Small delay to ensure collection registers
+            wait(0.1)
         end
-        
-        -- Collect the cube based on mode
-        if currentMode == "tp" or currentMode == "both" then
-            teleportToCube(cubeName)
-        end
-        
-        if currentMode == "bring" or currentMode == "both" then
-            bringCube(cubeName)
-        end
-        
-        -- Small delay to ensure collection registers
-        wait(0.1)
     end
     
     -- After collecting, check if there are more cubes
-    if not hopCancelled then
-        local remainingCubes = checkForCubes()
-        if #remainingCubes > 0 then
-            print("Found more cubes after collection, continuing...")
-            collectCubes(remainingCubes)
-        else
-            -- Start the 3-second timer for potential new cubes
-            startHopTimer()
-        end
+    wait(0.2) -- Brief pause for any new spawns
+    local remainingCubes = checkForCubes()
+    
+    if #remainingCubes > 0 then
+        print("🔄 Found " .. #remainingCubes .. " more cube(s), continuing collection...")
+        collectionActive = false
+        collectCubes(remainingCubes)
+    else
+        print("✅ All cubes collected, starting 3-second timer for new spawns...")
+        collectionActive = false
+        startHopTimer()
     end
 end
 
@@ -232,14 +262,44 @@ local function waitForGameLoad()
     repeat wait() until game.Workspace
 end
 
--- Main initialization and loop
+-- Handle new cube detection
+local function onNewCubeDetected(cubeName)
+    if hopTimer and not hopCancelled then
+        print("🛑 Hop cancelled - new cube detected: " .. cubeName)
+        cancelHopTimer()
+        
+        -- Collect all cubes including the new one
+        local cubesFound = checkForCubes()
+        if #cubesFound > 0 then
+            collectCubes(cubesFound)
+        end
+    elseif not collectionActive and gameInitialized then
+        -- If we're not actively collecting and not in a hop timer, collect new cubes
+        local cubesFound = checkForCubes()
+        if #cubesFound > 0 then
+            print("📦 New cube detected while idle, collecting...")
+            collectCubes(cubesFound)
+        end
+    end
+end
+
+-- Monitor for new cube spawns
+game:GetService("Workspace").ChildAdded:Connect(function(child)
+    for _, cubeName in ipairs(cubeNames) do
+        if child.Name == cubeName then
+            onNewCubeDetected(cubeName)
+            break
+        end
+    end
+end)
+
+-- Main initialization
 local function initialize()
-    print("=== Tycoon RNG Auto Collector ===")
+    print("⚙️ Initializing Tycoon RNG Auto Collector...")
     print("✓ TP to Cubes: ON")
     print("✓ Bring Cubes: ON")
     print("✓ Server Hop: ON")
     print("Mode: " .. currentMode)
-    print("Script URL: " .. scriptUrl)
     print("================================")
     
     -- Wait for basic game elements
@@ -252,7 +312,7 @@ local function initialize()
         if #cubesFound > 0 then
             gameInitialized = true
             print("✓ Game initialized! Found " .. #cubesFound .. " cube(s)")
-            print("Starting collection...")
+            print("🚀 Starting collection process...")
             
             -- Start collecting the cubes we found
             collectCubes(cubesFound)
@@ -279,42 +339,21 @@ local function initialize()
     
     -- Character respawn handler
     game.Players.LocalPlayer.CharacterAdded:Connect(function()
-        wait(0.1)
+        print("👤 Character respawned")
+        wait(1)
         if gameInitialized then
-            -- Resume collection if game was already initialized
+            -- Check for cubes after respawn
             local cubesFound = checkForCubes()
             if #cubesFound > 0 then
+                print("📦 Found cubes after respawn, collecting...")
                 collectCubes(cubesFound)
+            else
+                print("⏱️ No cubes after respawn, starting timer...")
+                startHopTimer()
             end
         end
     end)
 end
-
--- Handle hop cancellation from new cube discoveries
-local function onNewCubeDetected()
-    if hopTimer and not hopCancelled then
-        hopCancelled = true
-        hopTimer:Disconnect()
-        hopTimer = nil
-        print("🛑 Hop cancelled - new cube detected!")
-        
-        -- Collect the new cubes
-        local cubesFound = checkForCubes()
-        if #cubesFound > 0 then
-            collectCubes(cubesFound)
-        end
-    end
-end
-
--- Monitor for new cube spawns
-game:GetService("Workspace").ChildAdded:Connect(function(child)
-    for _, cubeName in ipairs(cubeNames) do
-        if child.Name == cubeName then
-            onNewCubeDetected()
-            break
-        end
-    end
-end)
 
 -- Start the script
 initialize()
