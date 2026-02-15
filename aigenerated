@@ -27,6 +27,8 @@ local gameInitialized = false
 local hopTimer = nil
 local hopCancelled = false
 local collectionActive = false
+local availableServers = {} -- Store servers once
+local serversFetched = false
 
 -- Wait for game to fully load
 print("=== Tycoon RNG Auto Collector ===")
@@ -39,27 +41,11 @@ end
 print("✓ Game loaded!")
 print("================================")
 
--- Function to set up teleport queue
-local function setupTeleportQueue()
-    if queue_on_teleport then
-        queue_on_teleport([[loadstring(game:HttpGet("]] .. scriptUrl .. [["))()]])
-        print("✓ Teleport queue set up successfully")
-    else
-        print("⚠ queue_on_teleport not available, using fallback method")
-        game:GetService("TeleportService").TeleportInitFailed:Connect(function()
-            wait(5)
-            loadstring(game:HttpGet(scriptUrl))()
-        end)
-    end
-end
-
--- Server hopping function
-local function serverHop()
-    if isServerHopping then return end
-    isServerHopping = true
+-- Function to fetch servers (ONCE)
+local function fetchServers()
+    if serversFetched then return end
     
-    print("🔄 Preparing to server hop...")
-    setupTeleportQueue()
+    print("🌐 Fetching server list (once per execution)...")
     
     local function getServers(cursor)
         local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?limit=100", placeId)
@@ -77,14 +63,14 @@ local function serverHop()
         return nil
     end
     
-    local servers = {}
     local cursor = nil
     repeat
         local data = getServers(cursor)
         if data and data.data then
             for _, server in ipairs(data.data) do
+                -- Skip current server and full servers
                 if server.id ~= game.JobId and server.playing < server.maxPlayers then
-                    table.insert(servers, server.id)
+                    table.insert(availableServers, server.id)
                 end
             end
             cursor = data.nextPageCursor
@@ -93,14 +79,53 @@ local function serverHop()
         end
     until not cursor
     
-    if #servers > 0 then
-        local randomServer = servers[math.random(1, #servers)]
+    serversFetched = true
+    print("✓ Found " .. #availableServers .. " available servers")
+end
+
+-- Function to set up teleport queue
+local function setupTeleportQueue()
+    if queue_on_teleport then
+        queue_on_teleport([[loadstring(game:HttpGet("]] .. scriptUrl .. [["))()]])
+        print("✓ Teleport queue set up successfully")
+    else
+        print("⚠ queue_on_teleport not available, using fallback method")
+        game:GetService("TeleportService").TeleportInitFailed:Connect(function()
+            wait(5)
+            loadstring(game:HttpGet(scriptUrl))()
+        end)
+    end
+end
+
+-- Server hopping function (uses pre-fetched list)
+local function serverHop()
+    if isServerHopping then return end
+    isServerHopping = true
+    
+    -- Fetch servers if not already fetched
+    if not serversFetched then
+        fetchServers()
+    end
+    
+    print("🔄 Preparing to server hop...")
+    setupTeleportQueue()
+    
+    -- Filter out current server from available list
+    local validServers = {}
+    for _, serverId in ipairs(availableServers) do
+        if serverId ~= game.JobId then
+            table.insert(validServers, serverId)
+        end
+    end
+    
+    if #validServers > 0 then
+        local randomServer = validServers[math.random(1, #validServers)]
         print("🚀 Server hopping to: " .. randomServer)
         game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer, game.Players.LocalPlayer)
     else
-        print("⚠ No other servers available, retrying in 5 seconds...")
+        print("⚠ No other servers available, will retry in 30 seconds...")
         isServerHopping = false
-        wait(5)
+        wait(30)
         serverHop()
     end
 end
@@ -119,43 +144,66 @@ local function checkForCubes()
     return cubesFound
 end
 
--- TP to cubes function
+-- TP to cubes function with retry
 local function teleportToCube(cubeName)
     local player = game.Players.LocalPlayer
+    local maxRetries = 3
+    local retryDelay = 0.2
     
     if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
         local humanoidRootPart = player.Character.HumanoidRootPart
-        local cubeModel = game.Workspace:FindFirstChild(cubeName)
         
-        if cubeModel and cubeModel:IsA("Model") then
-            local modelCenter = cubeModel:GetModelCFrame().p
-            humanoidRootPart.CFrame = CFrame.new(modelCenter)
-            print("📦 Teleported to: " .. cubeName)
-            return true
+        for attempt = 1, maxRetries do
+            local cubeModel = game.Workspace:FindFirstChild(cubeName)
+            
+            if cubeModel and cubeModel:IsA("Model") then
+                local modelCenter = cubeModel:GetModelCFrame().p
+                humanoidRootPart.CFrame = CFrame.new(modelCenter)
+                
+                -- Verify we actually moved
+                if (humanoidRootPart.Position - modelCenter).Magnitude < 5 then
+                    print("📦 Teleported to: " .. cubeName)
+                    return true
+                end
+            end
+            wait(retryDelay)
         end
     end
     return false
 end
 
--- Bring cubes function (fire touch detectors)
+-- Bring cubes function with retry
 local function bringCube(cubeName)
     local player = game.Players.LocalPlayer
+    local maxRetries = 3
+    local retryDelay = 0.2
+    
     if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
         return false
     end
     
     local humanoidRootPart = player.Character.HumanoidRootPart
-    local cubeModel = game.Workspace:FindFirstChild(cubeName)
     
-    if cubeModel and cubeModel:IsA("Model") then
-        for _, child in ipairs(cubeModel:GetDescendants()) do
-            if child:IsA("TouchTransmitter") then
-                firetouchinterest(humanoidRootPart, child.Parent, 0)
-                firetouchinterest(humanoidRootPart, child.Parent, 1)
-                print("✨ Collected: " .. cubeName)
-                return true
+    for attempt = 1, maxRetries do
+        local cubeModel = game.Workspace:FindFirstChild(cubeName)
+        
+        if cubeModel and cubeModel:IsA("Model") then
+            for _, child in ipairs(cubeModel:GetDescendants()) do
+                if child:IsA("TouchTransmitter") then
+                    firetouchinterest(humanoidRootPart, child.Parent, 0)
+                    wait(0.05)
+                    firetouchinterest(humanoidRootPart, child.Parent, 1)
+                    
+                    -- Quick check if cube still exists (might have been collected)
+                    wait(0.1)
+                    if not game.Workspace:FindFirstChild(cubeName) then
+                        print("✨ Collected: " .. cubeName)
+                        return true
+                    end
+                end
             end
         end
+        wait(retryDelay)
     end
     return false
 end
@@ -178,7 +226,7 @@ local function startHopTimer()
     print("⏱️ 3-second timer started - waiting for more cubes...")
     
     -- Small delay to ensure any just-spawned cubes are detected
-    wait(0.1)
+    wait(0.2)
     
     -- Check if cubes appeared during the delay
     local immediateCubes = checkForCubes()
@@ -211,7 +259,7 @@ local function startHopTimer()
     end)
 end
 
--- Main collection function (recursive)
+-- Main collection function with failed cube tracking
 local function collectCubes(cubesToCollect)
     if collectionActive then return end
     collectionActive = true
@@ -221,25 +269,57 @@ local function collectCubes(cubesToCollect)
     
     print("🔍 Starting collection of " .. #cubesToCollect .. " cube(s)...")
     
+    local failedCubes = {}
+    
     for _, cubeName in ipairs(cubesToCollect) do
         -- Check if cube still exists (might have been collected by someone else)
         if game.Workspace:FindFirstChild(cubeName) then
+            local success = false
+            
             -- Collect the cube based on mode
             if currentMode == "tp" or currentMode == "both" then
-                teleportToCube(cubeName)
+                if teleportToCube(cubeName) then
+                    success = true
+                end
             end
             
             if currentMode == "bring" or currentMode == "both" then
-                bringCube(cubeName)
+                if bringCube(cubeName) then
+                    success = true
+                end
             end
             
-            -- Small delay to ensure collection registers
+            -- If collection failed, add to retry list
+            if not success and game.Workspace:FindFirstChild(cubeName) then
+                table.insert(failedCubes, cubeName)
+                print("⚠ Failed to collect: " .. cubeName .. " (will retry)")
+            end
+            
+            -- Small delay between cubes
             wait(0.1)
         end
     end
     
+    -- Retry failed cubes
+    if #failedCubes > 0 then
+        print("🔄 Retrying " .. #failedCubes .. " failed cube(s)...")
+        wait(0.5) -- Longer delay before retry
+        
+        for _, cubeName in ipairs(failedCubes) do
+            if game.Workspace:FindFirstChild(cubeName) then
+                if currentMode == "tp" or currentMode == "both" then
+                    teleportToCube(cubeName)
+                end
+                if currentMode == "bring" or currentMode == "both" then
+                    bringCube(cubeName)
+                end
+                wait(0.1)
+            end
+        end
+    end
+    
     -- After collecting, check if there are more cubes
-    wait(0.2) -- Brief pause for any new spawns
+    wait(0.3) -- Brief pause for any new spawns
     local remainingCubes = checkForCubes()
     
     if #remainingCubes > 0 then
@@ -300,6 +380,10 @@ local function initialize()
     print("✓ Bring Cubes: ON")
     print("✓ Server Hop: ON")
     print("Mode: " .. currentMode)
+    
+    -- Fetch servers ONCE at startup
+    fetchServers()
+    
     print("================================")
     
     -- Wait for basic game elements
