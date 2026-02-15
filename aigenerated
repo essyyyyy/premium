@@ -22,7 +22,7 @@ local cubeNames = {
 local placeId = 17601705136
 local currentMode = "both" -- Can be "tp", "bring", or "both"
 local isServerHopping = false
-local scriptUrl = "https://raw.githubusercontent.com/yourusername/yourrepo/main/script.lua" -- Replace with actual URL where this script is hosted
+local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads/main/aigenerated" -- Replace with actual URL where this script is hosted
 
 -- Function to set up teleport queue
 local function setupTeleportQueue()
