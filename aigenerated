@@ -27,7 +27,7 @@ local gameInitialized = false
 local hopTimer = nil
 local hopCancelled = false
 local collectionActive = false
-local availableServers = {} -- Store servers once
+local availableServers = {}
 local serversFetched = false
 
 -- Wait for game to fully load
@@ -68,7 +68,6 @@ local function fetchServers()
         local data = getServers(cursor)
         if data and data.data then
             for _, server in ipairs(data.data) do
-                -- Skip current server and full servers
                 if server.id ~= game.JobId and server.playing < server.maxPlayers then
                     table.insert(availableServers, server.id)
                 end
@@ -102,7 +101,6 @@ local function serverHop()
     if isServerHopping then return end
     isServerHopping = true
     
-    -- Fetch servers if not already fetched
     if not serversFetched then
         fetchServers()
     end
@@ -110,7 +108,6 @@ local function serverHop()
     print("🔄 Preparing to server hop...")
     setupTeleportQueue()
     
-    -- Filter out current server from available list
     local validServers = {}
     for _, serverId in ipairs(availableServers) do
         if serverId ~= game.JobId then
@@ -160,8 +157,10 @@ local function teleportToCube(cubeName)
                 local modelCenter = cubeModel:GetModelCFrame().p
                 humanoidRootPart.CFrame = CFrame.new(modelCenter)
                 
+                wait(0.1) -- Wait for movement to complete
+                
                 -- Verify we actually moved
-                if (humanoidRootPart.Position - modelCenter).Magnitude < 5 then
+                if (humanoidRootPart.Position - modelCenter).Magnitude < 10 then
                     print("📦 Teleported to: " .. cubeName)
                     return true
                 end
@@ -172,35 +171,53 @@ local function teleportToCube(cubeName)
     return false
 end
 
--- Bring cubes function with retry
+-- Fixed bring cubes function with proper error checking
 local function bringCube(cubeName)
     local player = game.Players.LocalPlayer
     local maxRetries = 3
     local retryDelay = 0.2
     
-    if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+    if not player or not player.Character then
         return false
     end
     
-    local humanoidRootPart = player.Character.HumanoidRootPart
+    -- Wait for HumanoidRootPart if it doesn't exist yet
+    local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then
+        humanoidRootPart = player.Character:WaitForChild("HumanoidRootPart", 2)
+        if not humanoidRootPart then
+            return false
+        end
+    end
     
     for attempt = 1, maxRetries do
         local cubeModel = game.Workspace:FindFirstChild(cubeName)
         
         if cubeModel and cubeModel:IsA("Model") then
+            -- Try to find any part with TouchTransmitter
             for _, child in ipairs(cubeModel:GetDescendants()) do
-                if child:IsA("TouchTransmitter") then
-                    firetouchinterest(humanoidRootPart, child.Parent, 0)
-                    wait(0.05)
-                    firetouchinterest(humanoidRootPart, child.Parent, 1)
+                if child:IsA("TouchTransmitter") and child.Parent and child.Parent:IsA("BasePart") then
+                    -- Use pcall to handle any errors with firetouchinterest
+                    local success = pcall(function()
+                        firetouchinterest(humanoidRootPart, child.Parent, 0)
+                        wait(0.05)
+                        firetouchinterest(humanoidRootPart, child.Parent, 1)
+                    end)
                     
-                    -- Quick check if cube still exists (might have been collected)
-                    wait(0.1)
-                    if not game.Workspace:FindFirstChild(cubeName) then
-                        print("✨ Collected: " .. cubeName)
-                        return true
+                    if success then
+                        wait(0.1)
+                        -- Check if cube was collected (disappeared)
+                        if not game.Workspace:FindFirstChild(cubeName) then
+                            print("✨ Collected: " .. cubeName)
+                            return true
+                        end
                     end
                 end
+            end
+            
+            -- If we couldn't find TouchTransmitter, try clicking any part
+            if not game.Workspace:FindFirstChild(cubeName) then
+                return true -- Cube already gone
             end
         end
         wait(retryDelay)
@@ -219,16 +236,13 @@ end
 
 -- Start the 3-second hop timer
 local function startHopTimer()
-    -- Cancel any existing timer
     cancelHopTimer()
     
     hopCancelled = false
     print("⏱️ 3-second timer started - waiting for more cubes...")
     
-    -- Small delay to ensure any just-spawned cubes are detected
     wait(0.2)
     
-    -- Check if cubes appeared during the delay
     local immediateCubes = checkForCubes()
     if #immediateCubes > 0 and not hopCancelled then
         print("📦 Cubes detected immediately, cancelling timer and collecting...")
@@ -236,7 +250,6 @@ local function startHopTimer()
         return
     end
     
-    -- Start the timer
     hopTimer = game:GetService("RunService").Stepped:Connect(function()
         wait(3)
         
@@ -264,7 +277,6 @@ local function collectCubes(cubesToCollect)
     if collectionActive then return end
     collectionActive = true
     
-    -- Cancel any pending hop timer
     cancelHopTimer()
     
     print("🔍 Starting collection of " .. #cubesToCollect .. " cube(s)...")
@@ -272,11 +284,9 @@ local function collectCubes(cubesToCollect)
     local failedCubes = {}
     
     for _, cubeName in ipairs(cubesToCollect) do
-        -- Check if cube still exists (might have been collected by someone else)
         if game.Workspace:FindFirstChild(cubeName) then
             local success = false
             
-            -- Collect the cube based on mode
             if currentMode == "tp" or currentMode == "both" then
                 if teleportToCube(cubeName) then
                     success = true
@@ -289,21 +299,18 @@ local function collectCubes(cubesToCollect)
                 end
             end
             
-            -- If collection failed, add to retry list
             if not success and game.Workspace:FindFirstChild(cubeName) then
                 table.insert(failedCubes, cubeName)
                 print("⚠ Failed to collect: " .. cubeName .. " (will retry)")
             end
             
-            -- Small delay between cubes
             wait(0.1)
         end
     end
     
-    -- Retry failed cubes
     if #failedCubes > 0 then
         print("🔄 Retrying " .. #failedCubes .. " failed cube(s)...")
-        wait(0.5) -- Longer delay before retry
+        wait(0.5)
         
         for _, cubeName in ipairs(failedCubes) do
             if game.Workspace:FindFirstChild(cubeName) then
@@ -318,8 +325,7 @@ local function collectCubes(cubesToCollect)
         end
     end
     
-    -- After collecting, check if there are more cubes
-    wait(0.3) -- Brief pause for any new spawns
+    wait(0.3)
     local remainingCubes = checkForCubes()
     
     if #remainingCubes > 0 then
@@ -348,13 +354,11 @@ local function onNewCubeDetected(cubeName)
         print("🛑 Hop cancelled - new cube detected: " .. cubeName)
         cancelHopTimer()
         
-        -- Collect all cubes including the new one
         local cubesFound = checkForCubes()
         if #cubesFound > 0 then
             collectCubes(cubesFound)
         end
     elseif not collectionActive and gameInitialized then
-        -- If we're not actively collecting and not in a hop timer, collect new cubes
         local cubesFound = checkForCubes()
         if #cubesFound > 0 then
             print("📦 New cube detected while idle, collecting...")
@@ -381,15 +385,12 @@ local function initialize()
     print("✓ Server Hop: ON")
     print("Mode: " .. currentMode)
     
-    -- Fetch servers ONCE at startup
     fetchServers()
     
     print("================================")
     
-    -- Wait for basic game elements
     waitForGameLoad()
     
-    -- Keep checking until we see at least 1 cube (game initialized)
     print("🔍 Scanning for cubes to confirm game initialization...")
     while not gameInitialized do
         local cubesFound = checkForCubes()
@@ -398,15 +399,13 @@ local function initialize()
             print("✓ Game initialized! Found " .. #cubesFound .. " cube(s)")
             print("🚀 Starting collection process...")
             
-            -- Start collecting the cubes we found
             collectCubes(cubesFound)
         else
-            -- No cubes yet, keep waiting and scanning
             wait(1)
         end
     end
     
-    -- Start anti-afk in separate thread
+    -- Anti-afk thread
     coroutine.wrap(function()
         while true do
             local player = game.Players.LocalPlayer
@@ -426,7 +425,6 @@ local function initialize()
         print("👤 Character respawned")
         wait(1)
         if gameInitialized then
-            -- Check for cubes after respawn
             local cubesFound = checkForCubes()
             if #cubesFound > 0 then
                 print("📦 Found cubes after respawn, collecting...")
@@ -439,5 +437,11 @@ local function initialize()
     end)
 end
 
--- Start the script
-initialize()
+-- Start the script with error handling
+local success, err = pcall(initialize)
+if not success then
+    print("❌ Error: " .. tostring(err))
+    print("Restarting in 5 seconds...")
+    wait(5)
+    loadstring(game:HttpGet(scriptUrl))()
+end
