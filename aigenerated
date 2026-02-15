@@ -22,7 +22,17 @@ local cubeNames = {
 local placeId = 17601705136
 local currentMode = "both" -- Can be "tp", "bring", or "both"
 local isServerHopping = false
-local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads/main/aigenerated" -- Replace with actual URL where this script is hosted
+local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads/main/aigenerated"
+
+-- Wait for game to fully load
+if not game:IsLoaded() then
+    print("Waiting for game to load...")
+    game.Loaded:Wait()
+    print("Game loaded!")
+end
+
+-- Wait a tiny bit extra for everything to initialize
+wait(0.5)
 
 -- Function to set up teleport queue
 local function setupTeleportQueue()
@@ -150,7 +160,9 @@ end
 -- Wait for game to be fully loaded
 local function waitForGameLoad()
     -- Wait for player to exist
-    repeat wait() until game.Players.LocalPlayer
+    repeat 
+        wait() 
+    until game.Players.LocalPlayer
     
     -- Wait for character to load
     if not game.Players.LocalPlayer.Character then
@@ -158,7 +170,9 @@ local function waitForGameLoad()
     end
     
     -- Wait for workspace to be ready
-    repeat wait() until game.Workspace
+    repeat 
+        wait() 
+    until game.Workspace
     
     -- Wait a tiny bit for everything to settle
     wait(0.1)
@@ -166,6 +180,7 @@ end
 
 -- Main loop function
 local function mainLoop()
+    print("Starting main loop...")
     while true do
         -- Reset server hop flag when we're in a new server
         isServerHopping = false
@@ -240,6 +255,7 @@ local function initialize()
     print("✓ Bring Cubes: ON")
     print("✓ Server Hop: ON")
     print("Mode: " .. currentMode)
+    print("Script URL: " .. scriptUrl)
     print("================================")
     
     -- Start anti-afk in separate thread
@@ -263,5 +279,15 @@ game.Players.LocalPlayer.CharacterAdded:Connect(function()
     coroutine.wrap(mainLoop)()
 end)
 
--- Start the script
+-- Start the script with game load check
+print("Script started - waiting for game to load...")
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+print("Game is loaded, initializing script...")
+
+-- Small delay after game loads
+wait(0.5)
+
+-- Initialize
 initialize()
