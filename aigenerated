@@ -32,6 +32,12 @@ local availableServers = {}
 local serversFetched = false
 local hopRetryCount = 0
 
+-- ===== CONFIGURATION =====
+-- Set this to false if you want to stay in the same server and just keep collecting
+-- Set this to true if you want to server hop when no cubes are found
+local SERVER_HOP_ENABLED = false
+-- ========================
+
 -- Wait for game to fully load
 print("=== Tycoon RNG Auto Collector ===")
 print("Waiting for game to load...")
@@ -45,6 +51,11 @@ print("================================")
 
 -- Function to fetch servers (can refresh if needed)
 local function fetchServers(refresh)
+    if not SERVER_HOP_ENABLED then 
+        print("⏸️ Server hopping disabled, skipping server list fetch")
+        return 
+    end
+    
     if refresh then
         print("🔄 Refreshing server list...")
         availableServers = {}
@@ -95,6 +106,8 @@ end
 
 -- Function to set up teleport queue
 local function setupTeleportQueue()
+    if not SERVER_HOP_ENABLED then return end
+    
     if queue_on_teleport then
         queue_on_teleport([[loadstring(game:HttpGet("]] .. scriptUrl .. [["))()]])
         print("✓ Teleport queue set up successfully")
@@ -109,6 +122,11 @@ end
 
 -- Server hopping function with retry and refresh
 local function serverHop()
+    if not SERVER_HOP_ENABLED then 
+        print("⏸️ Server hopping is disabled, staying in current server")
+        return 
+    end
+    
     if isServerHopping then return end
     isServerHopping = true
     
@@ -163,8 +181,8 @@ local function checkForCubes()
     return cubesFound
 end
 
--- Function to collect a cube with less spammy movement
-local function collectCubeUntilGone(cubeName)
+-- Function to collect a single cube until it's gone (with proper delays)
+local function collectSingleCube(cubeName)
     local player = game.Players.LocalPlayer
     if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
         return false
@@ -178,52 +196,59 @@ local function collectCubeUntilGone(cubeName)
     
     print("🔧 Attempting to collect: " .. cubeName)
     
+    -- First, teleport to the cube and wait a moment
+    local cubeModel = game.Workspace:FindFirstChild(cubeName)
+    if cubeModel and cubeModel:IsA("Model") then
+        local modelCenter = cubeModel:GetModelCFrame().p
+        humanoidRootPart.CFrame = CFrame.new(modelCenter)
+        wait(0.5) -- Wait after first teleport
+    end
+    
     while game.Workspace:FindFirstChild(cubeName) and (tick() - startTime) < maxTime do
         local cubeModel = game.Workspace:FindFirstChild(cubeName)
         if not cubeModel then break end
         
         local currentTime = tick()
         
-        -- TP to cube every 1 second (less spammy)
-        if currentTime - lastTPTime >= 1.0 then
+        -- TP to cube every 1.5 seconds (slower to avoid multiple cube TP)
+        if currentTime - lastTPTime >= 1.5 then
             if cubeModel and cubeModel:IsA("Model") then
                 local modelCenter = cubeModel:GetModelCFrame().p
                 humanoidRootPart.CFrame = CFrame.new(modelCenter)
                 lastTPTime = currentTime
+                wait(0.3) -- Wait after TP
             end
         end
         
-        -- Always try touch detection (this is fine to do frequently)
+        -- Try touch detection (but not too frequently)
         if cubeModel and cubeModel:IsA("Model") then
             for _, child in ipairs(cubeModel:GetDescendants()) do
                 if child:IsA("TouchTransmitter") and child.Parent then
                     pcall(function()
                         firetouchinterest(humanoidRootPart, child.Parent, 0)
-                        wait(0.05)
+                        wait(0.1)
                         firetouchinterest(humanoidRootPart, child.Parent, 1)
                     end)
                 end
             end
+            wait(0.3) -- Wait after touch attempts
         end
         
-        -- Gentle wiggle every 2 seconds with smaller movements (0.5 studs)
-        if currentTime - lastWiggleTime >= 2.0 then
+        -- Gentle wiggle every 3 seconds
+        if currentTime - lastWiggleTime >= 3.0 then
             if cubeModel and cubeModel:IsA("Model") then
                 local modelCenter = cubeModel:GetModelCFrame().p
                 
-                -- Small 0.5 stud movements in cardinal directions
+                -- Small 0.5 stud movements
                 local offsets = {
                     CFrame.new(0.5, 0, 0),
                     CFrame.new(-0.5, 0, 0),
-                    CFrame.new(0, 0, 0.5),
-                    CFrame.new(0, 0, -0.5),
-                    CFrame.new(0, 0.5, 0)
                 }
                 
                 for _, offset in ipairs(offsets) do
                     if not game.Workspace:FindFirstChild(cubeName) then break end
                     humanoidRootPart.CFrame = CFrame.new(modelCenter) * offset
-                    wait(0.2) -- Small pause between movements
+                    wait(0.3)
                     
                     -- Try touch detection during wiggle
                     for _, child in ipairs(cubeModel:GetDescendants()) do
@@ -234,9 +259,10 @@ local function collectCubeUntilGone(cubeName)
                             end)
                         end
                     end
+                    wait(0.2)
                 end
                 
-                -- Return to center after wiggle
+                -- Return to center
                 if game.Workspace:FindFirstChild(cubeName) then
                     humanoidRootPart.CFrame = CFrame.new(modelCenter)
                 end
@@ -245,7 +271,7 @@ local function collectCubeUntilGone(cubeName)
             end
         end
         
-        wait(0.3) -- Main loop delay
+        wait(0.5) -- Main loop delay
     end
     
     local success = not game.Workspace:FindFirstChild(cubeName)
@@ -269,6 +295,25 @@ end
 local function startHopTimer()
     -- Cancel any existing timer
     cancelHopTimer()
+    
+    -- If server hopping is disabled, don't start timer, just keep scanning
+    if not SERVER_HOP_ENABLED then
+        print("⏸️ Server hopping disabled - continuously scanning for cubes...")
+        spawn(function()
+            while true do
+                wait(3) -- Check every 3 seconds
+                if not collectionActive and gameInitialized then
+                    local cubesFound = checkForCubes()
+                    if #cubesFound > 0 then
+                        print("📦 Found cubes while scanning, collecting...")
+                        collectCubes(cubesFound)
+                    end
+                end
+                wait(1)
+            end
+        end)
+        return
+    end
     
     hopTimerActive = true
     hopCancelled = false
@@ -296,9 +341,14 @@ local function startHopTimer()
             local remainingCubes = checkForCubes()
             
             if #remainingCubes == 0 then
-                print("❌ No cubes found after 3 seconds, hopping to new server...")
+                print("❌ No cubes found after 3 seconds" .. (SERVER_HOP_ENABLED and ", hopping to new server..." or ", continuing to scan..."))
                 hopTimerActive = false
-                serverHop()
+                if SERVER_HOP_ENABLED then
+                    serverHop()
+                else
+                    -- Just restart the scan
+                    startHopTimer()
+                end
             else
                 print("📦 Found " .. #remainingCubes .. " cube(s) after timer, collecting...")
                 hopTimerActive = false
@@ -308,39 +358,46 @@ local function startHopTimer()
     end)
 end
 
--- Main collection function
+-- Main collection function (processes ONE cube at a time)
 local function collectCubes(cubesToCollect)
     if collectionActive then return end
     collectionActive = true
     
     cancelHopTimer()
     
-    print("🔍 Starting collection of " .. #cubesToCollect .. " cube(s)...")
+    print("🔍 Starting collection of " .. #cubesToCollect .. " cube(s) - processing ONE at a time...")
     
     local failedCubes = {}
     
-    for _, cubeName in ipairs(cubesToCollect) do
+    -- Process each cube ONE AT A TIME with delays between
+    for index, cubeName in ipairs(cubesToCollect) do
         if game.Workspace:FindFirstChild(cubeName) then
-            -- Try to collect until it's gone
-            local success = collectCubeUntilGone(cubeName)
+            print("📦 Processing cube " .. index .. "/" .. #cubesToCollect .. ": " .. cubeName)
+            
+            -- Focus on this ONE cube until it's collected or times out
+            local success = collectSingleCube(cubeName)
             
             if not success and game.Workspace:FindFirstChild(cubeName) then
                 table.insert(failedCubes, cubeName)
+                print("⚠ Will retry " .. cubeName .. " later")
             end
             
-            wait(0.2) -- Small pause between cubes
+            -- CRITICAL: Wait between cubes to prevent multiple cube TP
+            print("⏱️ Waiting 1 second before next cube...")
+            wait(1.0)
         end
     end
     
-    -- Retry failed cubes with slightly more aggressive but still gentle method
+    -- If there are failed cubes, retry them ONE AT A TIME
     if #failedCubes > 0 then
-        print("🔄 Retrying " .. #failedCubes .. " failed cube(s) gently...")
-        wait(1.0)
+        print("🔄 Retrying " .. #failedCubes .. " failed cube(s) one at a time...")
+        wait(1.5) -- Longer wait before retry batch
         
-        for _, cubeName in ipairs(failedCubes) do
+        for index, cubeName in ipairs(failedCubes) do
             if game.Workspace:FindFirstChild(cubeName) then
-                print("⚡ Gentle retry for: " .. cubeName)
+                print("⚡ Retry " .. index .. "/" .. #failedCubes .. ": " .. cubeName)
                 
+                -- Focus on this ONE cube again
                 local cubeModel = game.Workspace:FindFirstChild(cubeName)
                 if cubeModel and cubeModel:IsA("Model") then
                     local modelCenter = cubeModel:GetModelCFrame().p
@@ -349,11 +406,11 @@ local function collectCubes(cubesToCollect)
                     if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                         local hrp = player.Character.HumanoidRootPart
                         
-                        -- Just TP to center and wait
+                        -- TP to center
                         hrp.CFrame = CFrame.new(modelCenter)
                         wait(1.0)
                         
-                        -- Try touch detection a few times
+                        -- Try touch detection a few times with delays
                         for i = 1, 3 do
                             if not game.Workspace:FindFirstChild(cubeName) then break end
                             
@@ -361,25 +418,31 @@ local function collectCubes(cubesToCollect)
                                 if child:IsA("TouchTransmitter") and child.Parent then
                                     pcall(function()
                                         firetouchinterest(hrp, child.Parent, 0)
+                                        wait(0.2)
                                         firetouchinterest(hrp, child.Parent, 1)
                                     end)
                                 end
                             end
                             
-                            wait(0.3)
+                            wait(0.5) -- Wait between touch attempts
                         end
                     end
                 end
+                
+                -- Wait between retry cubes
+                if index < #failedCubes then
+                    wait(1.0)
+                end
             end
-            wait(0.3)
         end
     end
     
-    wait(0.5)
+    -- After all cubes processed, check for any new ones
+    wait(1.0)
     local remainingCubes = checkForCubes()
     
     if #remainingCubes > 0 then
-        print("🔄 Found " .. #remainingCubes .. " more cube(s), continuing collection...")
+        print("🔄 Found " .. #remainingCubes .. " more cube(s), continuing collection one at a time...")
         collectionActive = false
         collectCubes(remainingCubes)
     else
@@ -432,11 +495,15 @@ local function initialize()
     print("⚙️ Initializing Tycoon RNG Auto Collector...")
     print("✓ TP to Cubes: ON")
     print("✓ Bring Cubes: ON")
-    print("✓ Server Hop: ON")
+    print("✓ Server Hop: " .. (SERVER_HOP_ENABLED and "ON" or "OFF"))
     print("Mode: " .. currentMode)
     
-    -- Fetch servers ONCE at startup
-    fetchServers(false)
+    -- Fetch servers ONCE at startup (if enabled)
+    if SERVER_HOP_ENABLED then
+        fetchServers(false)
+    else
+        print("⏸️ Server hopping disabled - will stay in current server")
+    end
     
     print("================================")
     
