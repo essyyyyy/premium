@@ -20,9 +20,12 @@ local cubeNames = {
 }
 
 local placeId = 17601705136
-local currentMode = "both" -- Can be "tp", "bring", or "both"
+local currentMode = "both"
 local isServerHopping = false
 local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads/main/aigenerated"
+local gameInitialized = false
+local hopTimer = nil
+local hopCancelled = false
 
 -- Wait for game to fully load
 print("=== Tycoon RNG Auto Collector ===")
@@ -33,23 +36,14 @@ if not game:IsLoaded() then
 end
 
 print("✓ Game loaded!")
-print("Waiting 15 seconds for everything to initialize...")
-
--- Wait 15 seconds after game loads before doing anything
-wait(15)
-
-print("15 seconds complete, starting script...")
 print("================================")
 
 -- Function to set up teleport queue
 local function setupTeleportQueue()
-    -- Check if queue_on_teleport exists (Synapse, Script-Ware, etc.)
     if queue_on_teleport then
-        -- Queue the script to re-execute after teleport
         queue_on_teleport([[loadstring(game:HttpGet("]] .. scriptUrl .. [["))()]])
         print("✓ Teleport queue set up successfully")
     else
-        -- Fallback for executors without queue_on_teleport
         print("⚠ queue_on_teleport not available, using fallback method")
         game:GetService("TeleportService").TeleportInitFailed:Connect(function()
             wait(5)
@@ -63,10 +57,8 @@ local function serverHop()
     if isServerHopping then return end
     isServerHopping = true
     
-    -- Setup teleport queue before hopping
     setupTeleportQueue()
     
-    -- Get list of servers
     local function getServers(cursor)
         local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?limit=100", placeId)
         if cursor then
@@ -83,14 +75,12 @@ local function serverHop()
         return nil
     end
     
-    -- Collect all servers
     local servers = {}
     local cursor = nil
     repeat
         local data = getServers(cursor)
         if data and data.data then
             for _, server in ipairs(data.data) do
-                -- Skip current server and full servers
                 if server.id ~= game.JobId and server.playing < server.maxPlayers then
                     table.insert(servers, server.id)
                 end
@@ -101,12 +91,9 @@ local function serverHop()
         end
     until not cursor
     
-    -- If we found servers, join a random one
     if #servers > 0 then
         local randomServer = servers[math.random(1, #servers)]
         print("Server hopping to: " .. randomServer)
-        
-        -- Teleport to new server
         game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer, game.Players.LocalPlayer)
     else
         print("No other servers available, retrying...")
@@ -115,144 +102,137 @@ local function serverHop()
     end
 end
 
+-- Check if any cubes exist
+local function checkForCubes()
+    local cubesFound = {}
+    
+    for _, cubeName in ipairs(cubeNames) do
+        local cubeModel = game.Workspace:FindFirstChild(cubeName)
+        if cubeModel and cubeModel:IsA("Model") then
+            table.insert(cubesFound, cubeName)
+        end
+    end
+    
+    return cubesFound
+end
+
 -- TP to cubes function
-local function teleportToCube()
+local function teleportToCube(cubeName)
     local player = game.Players.LocalPlayer
     
     if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
         local humanoidRootPart = player.Character.HumanoidRootPart
+        local cubeModel = game.Workspace:FindFirstChild(cubeName)
         
-        for _, cubeName in ipairs(cubeNames) do
-            local cubeModel = game.Workspace:FindFirstChild(cubeName)
-            
-            if cubeModel and cubeModel:IsA("Model") then
-                local modelCenter = cubeModel:GetModelCFrame().p
-                humanoidRootPart.CFrame = CFrame.new(modelCenter)
-                print("Teleported to: " .. cubeName)
-                return true -- Cube found
-            end
+        if cubeModel and cubeModel:IsA("Model") then
+            local modelCenter = cubeModel:GetModelCFrame().p
+            humanoidRootPart.CFrame = CFrame.new(modelCenter)
+            print("Teleported to: " .. cubeName)
+            return true
         end
     end
-    return false -- No cube found
+    return false
 end
 
 -- Bring cubes function (fire touch detectors)
-local function bringCubes()
+local function bringCube(cubeName)
     local player = game.Players.LocalPlayer
     if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
         return false
     end
     
     local humanoidRootPart = player.Character.HumanoidRootPart
-    local cubeFound = false
+    local cubeModel = game.Workspace:FindFirstChild(cubeName)
     
-    for _, cubeName in ipairs(cubeNames) do
-        local cubeModel = game.Workspace:FindFirstChild(cubeName)
-        
-        if cubeModel and cubeModel:IsA("Model") then
-            for _, child in ipairs(cubeModel:GetDescendants()) do
-                if child:IsA("TouchTransmitter") then
-                    firetouchinterest(humanoidRootPart, child.Parent, 0)
-                    firetouchinterest(humanoidRootPart, child.Parent, 1)
-                    print("Collected: " .. cubeName)
-                    cubeFound = true
-                end
+    if cubeModel and cubeModel:IsA("Model") then
+        for _, child in ipairs(cubeModel:GetDescendants()) do
+            if child:IsA("TouchTransmitter") then
+                firetouchinterest(humanoidRootPart, child.Parent, 0)
+                firetouchinterest(humanoidRootPart, child.Parent, 1)
+                print("Collected: " .. cubeName)
+                return true
             end
         end
     end
+    return false
+end
+
+-- Start the 3-second hop timer
+local function startHopTimer()
+    if hopTimer then
+        hopTimer:Disconnect()
+        hopTimer = nil
+    end
     
-    return cubeFound
+    hopCancelled = false
+    print("⏱️ 3-second timer started - waiting for more cubes...")
+    
+    hopTimer = game:GetService("RunService").Stepped:Connect(function()
+        wait(3)
+        if hopTimer and not hopCancelled then
+            print("⏱️ 3 seconds passed, checking if any cubes remain...")
+            local remainingCubes = checkForCubes()
+            
+            if #remainingCubes == 0 then
+                print("No cubes remaining, hopping to new server...")
+                hopTimer:Disconnect()
+                hopTimer = nil
+                serverHop()
+            else
+                print("Cubes still exist, continuing collection...")
+                hopTimer:Disconnect()
+                hopTimer = nil
+                -- Continue collecting remaining cubes
+                collectCubes(remainingCubes)
+            end
+        end
+    end)
+end
+
+-- Main collection function
+local function collectCubes(cubesToCollect)
+    for _, cubeName in ipairs(cubesToCollect) do
+        -- Check if hop was cancelled
+        if hopCancelled then
+            break
+        end
+        
+        -- Collect the cube based on mode
+        if currentMode == "tp" or currentMode == "both" then
+            teleportToCube(cubeName)
+        end
+        
+        if currentMode == "bring" or currentMode == "both" then
+            bringCube(cubeName)
+        end
+        
+        -- Small delay to ensure collection registers
+        wait(0.1)
+    end
+    
+    -- After collecting, check if there are more cubes
+    if not hopCancelled then
+        local remainingCubes = checkForCubes()
+        if #remainingCubes > 0 then
+            print("Found more cubes after collection, continuing...")
+            collectCubes(remainingCubes)
+        else
+            -- Start the 3-second timer for potential new cubes
+            startHopTimer()
+        end
+    end
 end
 
 -- Wait for game to be fully loaded
 local function waitForGameLoad()
-    -- Wait for player to exist
-    repeat 
-        wait() 
-    until game.Players.LocalPlayer
-    
-    -- Wait for character to load
+    repeat wait() until game.Players.LocalPlayer
     if not game.Players.LocalPlayer.Character then
         game.Players.LocalPlayer.CharacterAdded:Wait()
     end
-    
-    -- Wait for workspace to be ready
-    repeat 
-        wait() 
-    until game.Workspace
+    repeat wait() until game.Workspace
 end
 
--- Main loop function
-local function mainLoop()
-    print("Starting main loop...")
-    while true do
-        -- Reset server hop flag when we're in a new server
-        isServerHopping = false
-        
-        -- Ensure game is loaded
-        waitForGameLoad()
-        
-        local player = game.Players.LocalPlayer
-        local character = player.Character
-        
-        -- Make sure character has HumanoidRootPart
-        if not character:FindFirstChild("HumanoidRootPart") then
-            character:WaitForChild("HumanoidRootPart")
-        end
-        
-        local cubeFound = false
-        
-        -- Execute based on current mode
-        if currentMode == "tp" or currentMode == "both" then
-            if teleportToCube() then
-                cubeFound = true
-            end
-        end
-        
-        if currentMode == "bring" or currentMode == "both" then
-            if bringCubes() then
-                cubeFound = true
-            end
-        end
-        
-        -- If no cubes found, server hop
-        if not cubeFound then
-            print("No cubes found in this server, hopping to new server...")
-            serverHop()
-            return -- Exit current loop, will restart in new server via queue
-        end
-    end
-end
-
--- Anti-AFK function
-local function antiAfk()
-    while true do
-        local player = game.Players.LocalPlayer
-        if player and player.Character then
-            local humanoid = player.Character:FindFirstChild("Humanoid")
-            if humanoid then
-                -- Minimal movement to prevent AFK
-                humanoid.Jump = true
-                humanoid.Jump = false
-            end
-        end
-        wait(300) -- Every 5 minutes
-    end
-end
-
--- Character respawn handler
-local function handleRespawn()
-    while true do
-        local player = game.Players.LocalPlayer
-        if player then
-            -- Wait for character to respawn
-            player.CharacterAdded:Wait()
-            print("Character respawned, continuing...")
-        end
-    end
-end
-
--- Initialize script
+-- Main initialization and loop
 local function initialize()
     print("=== Tycoon RNG Auto Collector ===")
     print("✓ TP to Cubes: ON")
@@ -262,42 +242,79 @@ local function initialize()
     print("Script URL: " .. scriptUrl)
     print("================================")
     
-    -- Start anti-afk in separate thread
-    coroutine.wrap(antiAfk)()
-    
-    -- Start respawn handler
-    coroutine.wrap(handleRespawn)()
-    
-    -- Wait for game to load
+    -- Wait for basic game elements
     waitForGameLoad()
     
-    -- Start main loop
-    mainLoop()
+    -- Keep checking until we see at least 1 cube (game initialized)
+    print("🔍 Scanning for cubes to confirm game initialization...")
+    while not gameInitialized do
+        local cubesFound = checkForCubes()
+        if #cubesFound > 0 then
+            gameInitialized = true
+            print("✓ Game initialized! Found " .. #cubesFound .. " cube(s)")
+            print("Starting collection...")
+            
+            -- Start collecting the cubes we found
+            collectCubes(cubesFound)
+        else
+            -- No cubes yet, keep waiting and scanning
+            wait(1)
+        end
+    end
+    
+    -- Start anti-afk in separate thread
+    coroutine.wrap(function()
+        while true do
+            local player = game.Players.LocalPlayer
+            if player and player.Character then
+                local humanoid = player.Character:FindFirstChild("Humanoid")
+                if humanoid then
+                    humanoid.Jump = true
+                    humanoid.Jump = false
+                end
+            end
+            wait(300)
+        end
+    end)()
+    
+    -- Character respawn handler
+    game.Players.LocalPlayer.CharacterAdded:Connect(function()
+        wait(0.1)
+        if gameInitialized then
+            -- Resume collection if game was already initialized
+            local cubesFound = checkForCubes()
+            if #cubesFound > 0 then
+                collectCubes(cubesFound)
+            end
+        end
+    end)
 end
 
--- Handle character respawns by restarting main loop
-game.Players.LocalPlayer.CharacterAdded:Connect(function()
-    -- Small delay for character to fully load
-    wait(0.1)
-    -- Restart main loop in a new thread
-    coroutine.wrap(mainLoop)()
+-- Handle hop cancellation from new cube discoveries
+local function onNewCubeDetected()
+    if hopTimer and not hopCancelled then
+        hopCancelled = true
+        hopTimer:Disconnect()
+        hopTimer = nil
+        print("🛑 Hop cancelled - new cube detected!")
+        
+        -- Collect the new cubes
+        local cubesFound = checkForCubes()
+        if #cubesFound > 0 then
+            collectCubes(cubesFound)
+        end
+    end
+end
+
+-- Monitor for new cube spawns
+game:GetService("Workspace").ChildAdded:Connect(function(child)
+    for _, cubeName in ipairs(cubeNames) do
+        if child.Name == cubeName then
+            onNewCubeDetected()
+            break
+        end
+    end
 end)
 
--- Start the script with game load check and 15 second wait
-print("Script started - waiting for game to load...")
-
--- FIRST: Wait for game to load
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
--- SECOND: Game is loaded, now wait 15 seconds
-print("✓ Game loaded!")
-print("⏳ Waiting 15 seconds for everything to initialize...")
-wait(15)
-
--- THIRD: 15 seconds passed, now start the script
-print("✓ 15 seconds complete, initializing script...")
-
--- Initialize
+-- Start the script
 initialize()
