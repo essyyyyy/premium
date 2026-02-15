@@ -25,10 +25,12 @@ local isServerHopping = false
 local scriptUrl = "https://raw.githubusercontent.com/essyyyyy/premium/refs/heads/main/aigenerated"
 local gameInitialized = false
 local hopTimer = nil
+local hopTimerActive = false
 local hopCancelled = false
 local collectionActive = false
 local availableServers = {}
 local serversFetched = false
+local hopRetryCount = 0
 
 -- Wait for game to fully load
 print("=== Tycoon RNG Auto Collector ===")
@@ -41,11 +43,17 @@ end
 print("✓ Game loaded!")
 print("================================")
 
--- Function to fetch servers (ONCE PER EXECUTION)
-local function fetchServers()
+-- Function to fetch servers (can refresh if needed)
+local function fetchServers(refresh)
+    if refresh then
+        print("🔄 Refreshing server list...")
+        availableServers = {}
+        serversFetched = false
+    end
+    
     if serversFetched then return end
     
-    print("🌐 Fetching server list (once per execution)...")
+    print("🌐 Fetching server list...")
     
     local function getServers(cursor)
         local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?limit=100", placeId)
@@ -81,6 +89,7 @@ local function fetchServers()
     
     availableServers = servers
     serversFetched = true
+    hopRetryCount = 0
     print("✓ Found " .. #availableServers .. " available servers")
 end
 
@@ -98,27 +107,44 @@ local function setupTeleportQueue()
     end
 end
 
--- Server hopping function (uses pre-fetched list)
+-- Server hopping function with retry and refresh
 local function serverHop()
     if isServerHopping then return end
     isServerHopping = true
     
-    -- Make sure we have servers
-    if not serversFetched or #availableServers == 0 then
-        fetchServers()
-    end
-    
     print("🔄 Preparing to server hop...")
     setupTeleportQueue()
     
-    if #availableServers > 0 then
-        local randomServer = availableServers[math.random(1, #availableServers)]
+    -- Ensure we have fresh server list if we've failed before
+    if hopRetryCount >= 3 then
+        fetchServers(true) -- Force refresh
+    elseif not serversFetched or #availableServers == 0 then
+        fetchServers(false)
+    end
+    
+    -- Filter out current server
+    local validServers = {}
+    for _, serverId in ipairs(availableServers) do
+        if serverId ~= game.JobId then
+            table.insert(validServers, serverId)
+        end
+    end
+    
+    if #validServers > 0 then
+        local randomServer = validServers[math.random(1, #validServers)]
         print("🚀 Server hopping to: " .. randomServer)
+        hopRetryCount = 0
         game:GetService("TeleportService"):TeleportToPlaceInstance(placeId, randomServer, game.Players.LocalPlayer)
     else
-        print("⚠ No other servers available, will retry in 30 seconds...")
+        hopRetryCount = hopRetryCount + 1
+        local waitTime = math.min(30 * hopRetryCount, 120) -- Progressive backoff
+        print("⚠ No other servers available (attempt " .. hopRetryCount .. "), refreshing list and retrying in " .. waitTime .. " seconds...")
+        
         isServerHopping = false
-        wait(30)
+        wait(waitTime)
+        
+        -- Refresh server list and try again
+        fetchServers(true)
         serverHop()
     end
 end
@@ -163,7 +189,6 @@ local function collectCubeUntilGone(cubeName)
                 if cubeModel and cubeModel:IsA("Model") then
                     local modelCenter = cubeModel:GetModelCFrame().p
                     humanoidRootPart.CFrame = CFrame.new(modelCenter)
-                    print("📦 TP to: " .. cubeName)
                 end
             end
             
@@ -234,43 +259,57 @@ local function cancelHopTimer()
         hopTimer:Disconnect()
         hopTimer = nil
     end
+    hopTimerActive = false
     hopCancelled = true
 end
 
 -- Start the 3-second hop timer
 local function startHopTimer()
+    -- Cancel any existing timer
     cancelHopTimer()
     
+    hopTimerActive = true
     hopCancelled = false
     print("⏱️ 3-second timer started - waiting for more cubes...")
     
+    -- Small delay to ensure any just-spawned cubes are detected
     wait(0.2)
     
+    -- Check if cubes appeared during the delay
     local immediateCubes = checkForCubes()
     if #immediateCubes > 0 and not hopCancelled then
         print("📦 Cubes detected immediately, cancelling timer and collecting...")
+        hopTimerActive = false
         collectCubes(immediateCubes)
         return
     end
     
+    -- Create new timer
     hopTimer = game:GetService("RunService").Stepped:Connect(function()
         wait(3)
         
-        if hopTimer and not hopCancelled then
+        -- Only proceed if timer is still active and not cancelled
+        if hopTimerActive and not hopCancelled then
             print("⏱️ 3 seconds passed, checking for cubes...")
             local remainingCubes = checkForCubes()
             
             if #remainingCubes == 0 then
                 print("❌ No cubes found after 3 seconds, hopping to new server...")
+                hopTimerActive = false
                 hopTimer:Disconnect()
                 hopTimer = nil
                 serverHop()
             else
                 print("📦 Found " .. #remainingCubes .. " cube(s) after timer, collecting...")
+                hopTimerActive = false
                 hopTimer:Disconnect()
                 hopTimer = nil
                 collectCubes(remainingCubes)
             end
+        elseif hopTimer then
+            -- Timer was cancelled, clean up
+            hopTimer:Disconnect()
+            hopTimer = nil
         end
     end)
 end
@@ -367,7 +406,7 @@ end
 
 -- Handle new cube detection
 local function onNewCubeDetected(cubeName)
-    if hopTimer and not hopCancelled then
+    if hopTimerActive and not hopCancelled then
         print("🛑 Hop cancelled - new cube detected: " .. cubeName)
         cancelHopTimer()
         
@@ -403,7 +442,7 @@ local function initialize()
     print("Mode: " .. currentMode)
     
     -- Fetch servers ONCE at startup
-    fetchServers()
+    fetchServers(false)
     
     print("================================")
     
